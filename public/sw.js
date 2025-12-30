@@ -2,6 +2,7 @@ const CACHE_NAME = "tuner-pwa-v1";
 const ASSETS = [
   "./",
   "./index.html",
+  "./transcript.html",
   "./manifest.webmanifest",
   "./sw.js",
   "./icons/icon-192.png",

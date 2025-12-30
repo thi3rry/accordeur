@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0b0f17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <title>Transcription audio live</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      max-width: 900px;
+      margin-inline: auto;
+      line-height: 1.35;
+    }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    button, select, input[type="checkbox"] {
+      font-size: 16px;
+    }
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(127,127,127,.35);
+      cursor: pointer;
+    }
+    button[disabled] { opacity: .5; cursor: not-allowed; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid rgba(127,127,127,.35);
+      border-radius: 999px;
+    }
+    .dot {
+      width: 10px; height: 10px; border-radius: 999px;
+      background: #888;
+    }
+    .dot.on { background: #2ecc71; }
+    .dot.err { background: #e74c3c; }
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .panel {
+      border: 1px solid rgba(127,127,127,.35);
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 110px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .label { font-weight: 600; margin-bottom: 8px; opacity: .9; }
+    .muted { opacity: .75; }
+    .hint {
+      margin-top: 10px;
+      font-size: 14px;
+      opacity: .8;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <h1>Transcription audio live (micro)</h1>
+
+  <div class="row">
+    <button id="btnStart">Démarrer</button>
+    <button id="btnStop" disabled>Stop</button>
+    <button id="btnClear">Effacer</button>
+
+    <div class="pill" title="État de la reconnaissance">
+      <span id="statusDot" class="dot"></span>
+      <span id="statusText" class="muted">Inactif</span>
+    </div>
+
+    <label class="pill">
+      Langue
+      <select id="lang">
+        <option value="fr-FR" selected>fr-FR</option>
+        <option value="en-US">en-US</option>
+        <option value="es-ES">es-ES</option>
+        <option value="de-DE">de-DE</option>
+        <option value="it-IT">it-IT</option>
+      </select>
+    </label>
+
+    <label class="pill" title="Affiche les résultats intermédiaires (moins stable, mais plus 'live')">
+      <input id="interim" type="checkbox" checked />
+      Intermédiaire
+    </label>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="label">Intermédiaire</div>
+      <div id="interimText" class="muted">—</div>
+    </div>
+    <div class="panel">
+      <div class="label">Final</div>
+      <div id="finalText">—</div>
+    </div>
+  </div>
+
+  <div class="hint">
+    Si rien ne se passe : autorise le micro, puis réessaie.  
+    Note : l’API <code>SpeechRecognition</code> est surtout supportée sur Chrome/Edge.
+  </div>
+
+  <script>
+    // --- Support check
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const supported = !!SR;
+
+    const btnStart = document.getElementById("btnStart");
+    const btnStop = document.getElementById("btnStop");
+    const btnClear = document.getElementById("btnClear");
+    const langSel = document.getElementById("lang");
+    const interimChk = document.getElementById("interim");
+
+    const interimEl = document.getElementById("interimText");
+    const finalEl = document.getElementById("finalText");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+
+    let recognition = null;
+    let isRunning = false;
+    let finalBuffer = "";
+
+    function setStatus(state, text) {
+      statusDot.classList.remove("on", "err");
+      if (state === "on") statusDot.classList.add("on");
+      if (state === "err") statusDot.classList.add("err");
+      statusText.textContent = text;
+    }
+
+    function ensureMicroPermission() {
+      // SpeechRecognition déclenche souvent la permission micro,
+      // mais sur certains environnements il faut un getUserMedia préalable.
+      return navigator.mediaDevices?.getUserMedia
+        ? navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            // On ferme immédiatement : on voulait juste la permission.
+            stream.getTracks().forEach(t => t.stop());
+          })
+        : Promise.resolve();
+    }
+
+    function buildRecognition() {
+      recognition = new SR();
+      recognition.lang = langSel.value;
+      recognition.continuous = true;         // essaye de rester actif
+      recognition.interimResults = interimChk.checked;
+
+      recognition.onstart = () => {
+        isRunning = true;
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        setStatus("on", "Écoute…");
+      };
+
+      recognition.onend = () => {
+        // Le navigateur peut couper la reco (silence, réseau, etc.)
+        const wasRunning = isRunning;
+        isRunning = false;
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        setStatus("off", "Inactif");
+
+        // Auto-restart si l’utilisateur n’a pas cliqué Stop
+        if (wasRunning) {
+          // petite relance pour éviter boucle agressive
+          setTimeout(() => {
+            try { recognition.start(); } catch (_) {}
+          }, 250);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        setStatus("err", `Erreur: ${e.error || "inconnue"}`);
+        // Certaines erreurs (not-allowed, service-not-allowed) => pas de restart.
+        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+          isRunning = false;
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+        }
+      };
+
+      recognition.onresult = (event) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const transcript = res[0]?.transcript ?? "";
+          if (res.isFinal) {
+            finalBuffer += transcript.trim() + "\n";
+          } else {
+            interim += transcript;
+          }
+        }
+        interimEl.textContent = interim.trim() || "—";
+        finalEl.textContent = finalBuffer.trim() || "—";
+      };
+    }
+
+    async function start() {
+      if (!supported) {
+        setStatus("err", "Non supporté par ce navigateur");
+        return;
+      }
+      try {
+        await ensureMicroPermission();
+        if (!recognition) buildRecognition();
+        recognition.lang = langSel.value;
+        recognition.interimResults = interimChk.checked;
+
+        // reset interim display
+        interimEl.textContent = "—";
+
+        recognition.start();
+      } catch (e) {
+        setStatus("err", "Permission micro refusée ou indisponible");
+      }
+    }
+
+    function stop() {
+      if (!recognition) return;
+      isRunning = false; // évite l’auto-restart
+      try { recognition.stop(); } catch (_) {}
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+      setStatus("off", "Inactif");
+    }
+
+    function clearAll() {
+      finalBuffer = "";
+      interimEl.textContent = "—";
+      finalEl.textContent = "—";
+    }
+
+    btnStart.addEventListener("click", start);
+    btnStop.addEventListener("click", stop);
+    btnClear.addEventListener("click", clearAll);
+
+    langSel.addEventListener("change", () => {
+      // Si on change la langue en live, on redémarre proprement
+      if (recognition && isRunning) {
+        stop();
+        setTimeout(start, 150);
+      }
+    });
+
+    interimChk.addEventListener("change", () => {
+      if (recognition && isRunning) {
+        stop();
+        setTimeout(start, 150);
+      }
+    });
+
+    if (!supported) {
+      setStatus("err", "SpeechRecognition indisponible");
+      btnStart.disabled = true;
+      btnStop.disabled = true;
+    }
+  </script>
+  <script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js");
+    });
+  }
+</script>
+</body>
+</html>
