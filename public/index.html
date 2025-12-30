@@ -22,8 +22,11 @@
       padding:24px;
     }
     .app{
-      width:min(960px, 100%);
-      display:grid; grid-template-columns: 1.2fr .8fr; gap:18px;
+      width: min(960px, 100%);
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      grid-template-rows: auto auto; /* contenu + footer */
+      gap: 18px;
     }
     @media (max-width: 820px){ .app{grid-template-columns:1fr; } }
     .card{
@@ -239,6 +242,13 @@
 
       <div class="strings" id="strings"></div>
     </aside>
+    <footer class="app-footer">
+      Vibe codé avec Chat GPT &amp; Github Codespaces
+      <br>
+      Hébergé par Github Pages
+      <br>
+      30/12/2025
+    </footer>
   </div>
 
 <script>
@@ -577,12 +587,6 @@
     });
   }
 </script>
-  <footer style="text-align: center;">
-    Vibe codé avec Chat GPT & Github Codespaces
-    <br>
-    Hébergé par Github Pages
-    <br>
-    30/12/2025
-  </footer>
+
 </body>
 </html>
